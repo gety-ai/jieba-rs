@@ -356,10 +356,13 @@ pub struct Tag<'a> {
     pub byte_end: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// What the dictionary knows about a word besides its spelling. Words with
+/// the same frequency and tag share one record: the default dictionary has
+/// 349,045 words but only 16,838 distinct records, so the trie maps each
+/// word to a record id and no per-word array exists at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Record {
-    /// Saturated to `u32` (see [`stored_freq`]); with the tag index that
-    /// makes an 8-byte record instead of 16.
+    /// Saturated to `u32` (see [`stored_freq`]).
     freq: u32,
     /// Index into `Jieba::tags`.
     tag: u32,
@@ -375,10 +378,14 @@ fn stored_freq(freq: usize) -> u32 {
 /// Jieba segmentation
 #[derive(Clone)]
 pub struct Jieba {
+    /// Distinct records, indexed by the record ids the trie stores.
     records: Vec<Record>,
+    record_ids: FxHashMap<Record, u32>,
     /// `ln(freq)` of each record, kept apart from `records` so the route
     /// calculation touches a dense `f64` array rather than whole records.
     log_freqs: Vec<f64>,
+    /// Number of words in the dictionary.
+    words: usize,
     /// Distinct POS tags; records refer to them by index. A dictionary has
     /// only a few dozen tags, so this replaces one heap string per word.
     tags: Vec<Box<str>>,
@@ -392,7 +399,7 @@ pub struct Jieba {
 impl fmt::Debug for Jieba {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Jieba")
-            .field("records_len", &self.records.len())
+            .field("records_len", &self.words)
             .field("total_freq", &self.total)
             .finish()
     }
@@ -410,7 +417,9 @@ impl Jieba {
     pub fn empty() -> Self {
         Jieba {
             records: Vec::new(),
+            record_ids: FxHashMap::default(),
             log_freqs: Vec::new(),
+            words: 0,
             tags: Vec::new(),
             tag_ids: FxHashMap::default(),
             trie: CharTrie::new(),
@@ -465,11 +474,9 @@ impl Jieba {
         // first thing loaded.
         let dict = DEFAULT_DICT.decode_string().expect("default dict is valid UTF-8");
         let dict = dict.as_str();
-        let check_duplicates = !self.records.is_empty();
+        let check_duplicates = self.words != 0;
         if !check_duplicates {
             let lines = bytecount::count(dict.as_bytes(), b'\n') + 1;
-            self.records.reserve(lines);
-            self.log_freqs.reserve(lines);
             self.trie.reserve(lines);
         }
         for line in dict.lines() {
@@ -530,7 +537,9 @@ impl Jieba {
     /// ```
     pub fn clear(&mut self) {
         self.records.clear();
+        self.record_ids.clear();
         self.log_freqs.clear();
+        self.words = 0;
         self.tags.clear();
         self.tag_ids.clear();
         self.trie = CharTrie::new();
@@ -550,29 +559,38 @@ impl Jieba {
         let freq = stored_freq(freq.unwrap_or_else(|| self.suggest_freq(word))) as usize;
         let tag = tag.unwrap_or("");
 
-        match self.trie.get(word) {
-            Some(word_id) => {
-                let old_freq = self.records[word_id as usize].freq as usize;
-                self.set_freq(word_id as usize, freq);
-
-                self.total += freq;
-                self.total -= old_freq;
-            }
-            None => {
-                self.push_record(word, freq, tag);
-                self.total += freq;
-            }
-        };
+        self.load_entry(word, freq, tag, true);
         self.update_log_total();
 
         freq
     }
 
+    /// Change the frequency of `word`, whose record is `record_id`, keeping
+    /// its tag.
     #[inline]
-    fn set_freq(&mut self, word_id: usize, freq: usize) {
-        let freq = stored_freq(freq);
-        self.records[word_id].freq = freq;
-        self.log_freqs[word_id] = f64::from(freq).ln();
+    fn set_freq(&mut self, word: &str, record_id: i32, freq: usize) {
+        let old = self.records[record_id as usize];
+        let record = Record {
+            freq: stored_freq(freq),
+            ..old
+        };
+        let id = self.record_id(record);
+        self.trie.insert(word, id);
+        self.total -= old.freq as usize;
+        self.total += record.freq as usize;
+    }
+
+    /// The id of `record`, adding it if it is new.
+    #[inline]
+    fn record_id(&mut self, record: Record) -> i32 {
+        if let Some(&id) = self.record_ids.get(&record) {
+            return id as i32;
+        }
+        let id = self.records.len() as u32;
+        self.records.push(record);
+        self.record_ids.insert(record, id);
+        self.log_freqs.push(f64::from(record.freq).ln());
+        id as i32
     }
 
     #[inline]
@@ -589,12 +607,12 @@ impl Jieba {
     /// Append a word the dictionary does not contain yet.
     #[inline]
     fn push_record(&mut self, word: &str, freq: usize, tag: &str) {
-        let word_id = self.records.len() as i32;
         let tag = self.intern_tag(tag);
         let freq = stored_freq(freq);
-        self.records.push(Record { freq, tag });
-        self.log_freqs.push(f64::from(freq).ln());
-        self.trie.insert(word, word_id);
+        let id = self.record_id(Record { freq, tag });
+        self.trie.insert(word, id);
+        self.words += 1;
+        self.total += freq as usize;
     }
 
     /// Add one dictionary entry; with `check_duplicates` an existing word only
@@ -603,7 +621,7 @@ impl Jieba {
     fn load_entry(&mut self, word: &str, freq: usize, tag: &str, check_duplicates: bool) {
         if check_duplicates {
             match self.trie.get(word) {
-                Some(word_id) => self.set_freq(word_id as usize, freq),
+                Some(record_id) => self.set_freq(word, record_id, freq),
                 None => self.push_record(word, freq, tag),
             }
         } else {
@@ -612,7 +630,6 @@ impl Jieba {
     }
 
     fn finish_load(&mut self) {
-        self.total = self.records.iter().map(|n| n.freq as usize).sum();
         self.update_log_total();
     }
 
@@ -654,7 +671,6 @@ impl Jieba {
     /// * A line in the dictionary file contains invalid frequency data (not a valid integer).
     pub fn load_dict<R: BufRead>(&mut self, dict: &mut R) -> Result<(), Error> {
         let mut buf = String::new();
-        self.total = 0;
 
         let mut line_no = 0;
         while dict.read_line(&mut buf)? > 0 {
