@@ -380,6 +380,9 @@ fn stored_freq(freq: usize) -> u32 {
 pub struct Jieba {
     /// Distinct records, indexed by the record ids the trie stores.
     records: Vec<Record>,
+    /// The id of each record, to find a word's record when it is added.
+    /// Only needed while the dictionary changes, so it is dropped when a
+    /// load finishes and rebuilt on the next change.
     record_ids: FxHashMap<Record, u32>,
     /// `ln(freq)` of each record, kept apart from `records` so the route
     /// calculation touches a dense `f64` array rather than whole records.
@@ -585,6 +588,9 @@ impl Jieba {
     /// The id of `record`, adding it if it is new.
     #[inline]
     fn record_id(&mut self, record: Record) -> i32 {
+        if self.record_ids.len() != self.records.len() {
+            self.record_ids = self.records.iter().copied().zip(0..).collect();
+        }
         if let Some(&id) = self.record_ids.get(&record) {
             return id as i32;
         }
@@ -633,6 +639,9 @@ impl Jieba {
 
     fn finish_load(&mut self) {
         self.trie.shrink_to_fit();
+        self.record_ids = FxHashMap::default();
+        self.records.shrink_to_fit();
+        self.log_freqs.shrink_to_fit();
         self.update_log_total();
     }
 
