@@ -358,9 +358,18 @@ pub struct Tag<'a> {
 
 #[derive(Debug, Clone, Copy)]
 struct Record {
-    freq: usize,
+    /// Saturated to `u32` (see [`stored_freq`]); with the tag index that
+    /// makes an 8-byte record instead of 16.
+    freq: u32,
     /// Index into `Jieba::tags`.
     tag: u32,
+}
+
+/// Frequency as stored in a [`Record`]. Real dictionary frequencies are
+/// below a million, so saturating at `u32::MAX` changes nothing in practice.
+#[inline]
+fn stored_freq(freq: usize) -> u32 {
+    u32::try_from(freq).unwrap_or(u32::MAX)
 }
 
 /// Jieba segmentation
@@ -538,12 +547,12 @@ impl Jieba {
         if word.is_empty() {
             return 0;
         }
-        let freq = freq.unwrap_or_else(|| self.suggest_freq(word));
+        let freq = stored_freq(freq.unwrap_or_else(|| self.suggest_freq(word))) as usize;
         let tag = tag.unwrap_or("");
 
         match self.trie.get(word) {
             Some(word_id) => {
-                let old_freq = self.records[word_id as usize].freq;
+                let old_freq = self.records[word_id as usize].freq as usize;
                 self.set_freq(word_id as usize, freq);
 
                 self.total += freq;
@@ -561,8 +570,9 @@ impl Jieba {
 
     #[inline]
     fn set_freq(&mut self, word_id: usize, freq: usize) {
+        let freq = stored_freq(freq);
         self.records[word_id].freq = freq;
-        self.log_freqs[word_id] = (freq as f64).ln();
+        self.log_freqs[word_id] = f64::from(freq).ln();
     }
 
     #[inline]
@@ -581,8 +591,9 @@ impl Jieba {
     fn push_record(&mut self, word: &str, freq: usize, tag: &str) {
         let word_id = self.records.len() as i32;
         let tag = self.intern_tag(tag);
+        let freq = stored_freq(freq);
         self.records.push(Record { freq, tag });
-        self.log_freqs.push((freq as f64).ln());
+        self.log_freqs.push(f64::from(freq).ln());
         self.trie.insert(word, word_id);
     }
 
@@ -601,7 +612,7 @@ impl Jieba {
     }
 
     fn finish_load(&mut self) {
-        self.total = self.records.iter().map(|n| n.freq).sum();
+        self.total = self.records.iter().map(|n| n.freq as usize).sum();
         self.update_log_total();
     }
 
@@ -679,7 +690,7 @@ impl Jieba {
 
     fn get_word_freq(&self, word: &str, default: usize) -> usize {
         match self.trie.get(word) {
-            Some(word_id) => self.records[word_id as usize].freq,
+            Some(word_id) => self.records[word_id as usize].freq as usize,
             None => default,
         }
     }
