@@ -476,8 +476,10 @@ impl Jieba {
         let dict = dict.as_str();
         let check_duplicates = self.words != 0;
         if !check_duplicates {
-            let lines = bytecount::count(dict.as_bytes(), b'\n') + 1;
-            self.trie.reserve(lines);
+            // The dictionary is sorted, so this counts the nodes exactly and
+            // the trie is sized once, as densely as it allows.
+            let words = dict.lines().filter_map(|line| line.split_ascii_whitespace().next());
+            self.trie.reserve(trie::count_slot_nodes(words));
         }
         for line in dict.lines() {
             let mut iter = line.split_ascii_whitespace();
@@ -630,6 +632,7 @@ impl Jieba {
     }
 
     fn finish_load(&mut self) {
+        self.trie.shrink_to_fit();
         self.update_log_total();
     }
 
