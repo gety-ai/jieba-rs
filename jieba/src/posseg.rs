@@ -231,14 +231,17 @@ fn parse_posseg_data(data: &str) -> PossegData {
 }
 
 #[cfg(feature = "default-dict")]
-include_flate::flate!(static POSSEG_DATA: str from "src/data/posseg.txt" with zstd);
+include_flate::flate!(static POSSEG_DATA: IFlate from "src/data/posseg.txt" with zstd);
 
 #[cfg(feature = "default-dict")]
 static POSSEG: OnceLock<PossegData> = OnceLock::new();
 
 #[cfg(feature = "default-dict")]
 pub(crate) fn posseg_data() -> &'static PossegData {
-    POSSEG.get_or_init(|| parse_posseg_data(&POSSEG_DATA))
+    POSSEG.get_or_init(|| {
+        let data = POSSEG_DATA.decode_string().expect("posseg data is valid UTF-8");
+        parse_posseg_data(&data)
+    })
 }
 
 impl PossegData {

@@ -100,7 +100,8 @@ mod sparse_dag;
 mod trie;
 
 #[cfg(feature = "default-dict")]
-include_flate::flate!(static DEFAULT_DICT: str from "src/data/dict.txt" with zstd);
+// Kept compressed: the inflated text is only needed while it is parsed.
+include_flate::flate!(static DEFAULT_DICT: IFlate from "src/data/dict.txt" with zstd);
 
 use sparse_dag::{NO_MATCH, StaticSparseDAG};
 use trie::CharTrie;
@@ -453,7 +454,8 @@ impl Jieba {
         // is parsed straight from the string, with no per-line copy or UTF-8
         // re-validation, and never checked for duplicates when it is the
         // first thing loaded.
-        let dict: &str = &DEFAULT_DICT;
+        let dict = DEFAULT_DICT.decode_string().expect("default dict is valid UTF-8");
+        let dict = dict.as_str();
         let check_duplicates = !self.records.is_empty();
         if !check_duplicates {
             let lines = bytecount::count(dict.as_bytes(), b'\n') + 1;

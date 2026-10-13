@@ -9,7 +9,7 @@ use super::{Keyword, KeywordExtract, KeywordExtractConfig, KeywordExtractConfigB
 use crate::FxHashMap as HashMap;
 use crate::Jieba;
 
-flate!(static DEFAULT_IDF: str from "src/data/idf.txt" with zstd);
+flate!(static DEFAULT_IDF: IFlate from "src/data/idf.txt" with zstd);
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct HeapNode<'a> {
@@ -174,7 +174,7 @@ impl Default for TfIdf {
     /// 2 Unicode Scalar Value minimum for keywords, and no hmm in segmentation.
     fn default() -> Self {
         let mut instance = TfIdf::new(None::<&mut io::Empty>, KeywordExtractConfigBuilder::default().build());
-        instance.load_str(&DEFAULT_IDF);
+        instance.load_str(&DEFAULT_IDF.decode_string().expect("default idf is valid UTF-8"));
         instance
     }
 }

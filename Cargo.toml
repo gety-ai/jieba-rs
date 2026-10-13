@@ -19,7 +19,7 @@ c_fixed_string = { version = "0.2" }
 bytecount = { version = "0.6", features = ["runtime-dispatch-simd"] }
 codspeed-criterion-compat = { version = "3.0.5" }
 rustc-hash = { version = "2.1" }
-include-flate = { version = "0.3.1" }
+include-flate = { version = "0.3.4" }
 ordered-float = { version = "5.0" }
 rayon = { version = "1.11" }
 expect-test = { version = "1.5" }
